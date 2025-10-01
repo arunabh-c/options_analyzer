@@ -6,10 +6,21 @@ import threading
 from ib_insync import *
 import yfinance as yf
 from datetime import datetime
+import webbrowser
+
+from datetime import date
+
+today = date.today().strftime("%Y%m%d")
 
 port = 7497
-stk = "RKLB"
+stk = "GOOG"
 days_array = []
+time_array = []
+chrome_path = 'C:/Program Files/Google/Chrome/Application/chrome.exe %s'
+threshold = 1.5
+browser_switch=False
+max_trade_string=""
+max_trade = 0.0
 
 def get_historical_data(app, contract):
     """
@@ -25,7 +36,7 @@ def get_historical_data(app, contract):
     app.reqHistoricalData(
         reqId=req_id, 
         contract=contract, 
-        endDateTime="20250923 11:00:00 US/Eastern", 
+        endDateTime=today + " 17:30:00 US/Eastern", 
         durationStr="6 M", 
         barSizeSetting="1 hour", 
         whatToShow="TRADES", 
@@ -69,14 +80,23 @@ def get_days_to_expiry(expiry, date):
     # Return the absolute number of days
     return abs(time_difference.days)
         
-def get_daily_change(threshold, data, name, expiry):
+def get_daily_change(threshold, data, prev_data, name, expiry):
     
-    delta = (data.close - data.open)/data.open
+    delta = float(data.wap)/float(prev_data.wap)
     delta = round(delta,2)
+    global max_trade
+    global max_trade_string
     if  delta > threshold:
         days = get_days_to_expiry(expiry, data.date.split()[0])
         days_array.append(days)
-        print(f"The option {name} went {round(delta+1,2)}x from {data.open} to {data.close}, {days} days from expiry on {data.date}")
+        time_array.append(data.date.split()[1])
+        print(f"The option {name} went {round(delta,2)}x from {prev_data.wap} @ {prev_data.date} to {data.wap} @ {data.date}, {days} days from expiry")
+        trade_vol = round(data.wap * 100 * data.volume,2)
+        if trade_vol > max_trade:
+            max_trade = trade_vol
+            max_trade_string = "The option " + name + " had trading volume of " + str(data.volume) + " for a total of " + str(trade_vol) + " on " + data.date
+
+        print(f"The option {name} had trading volume of {data.volume} for a total of ${trade_vol}")
         return True
     else:
         return False
@@ -177,19 +197,34 @@ if __name__ == "__main__":
                     #print(f"Received {len(time_data)} bars of historical data.")
                     avail_time_data = avail_time_data + 1
                     ctr = 0
-                    name = c.symbol + c.lastTradeDateOrContractMonth[2:] + c.right + "00" + str(int(c.strike)) + "000"
+                    pre_strike_prefix = "000"
+                    if (int(c.strike) >= 100):
+                       pre_strike_prefix = "00"
+                    elif (int(c.strike) < 10):
+                       pre_strike_prefix = "0000"
+                    name = c.symbol + c.lastTradeDateOrContractMonth[2:] + c.right + pre_strike_prefix + str(int((c.strike)*1000))
+                    prev_data = time_data[0]
                     for data in time_data:
-                        if (get_daily_change(1,data, name,c.lastTradeDateOrContractMonth)):
-                            ctr = ctr + 1                            
+                        if (get_daily_change(threshold,data, prev_data,name,c.lastTradeDateOrContractMonth)):
+                            ctr = ctr + 1
+                        prev_data = data                            
                     if ctr:
                       total = total + 1
-                      print(f"{total}. The option {name} went >= {1+1}x {ctr} times \n")
+                      print(f"{total}. The option {name} went >= {threshold}x {ctr} times")
+                      url = "https://finance.yahoo.com/chart/" + name
+                      print(f"url: {url}\n")
+                      if browser_switch:
+                        webbrowser.get(chrome_path).open_new_tab(url)
                 #else:
                     #print("No historical data was returned.")
-        print(f"{avail_time_data} contracts out of a total of {total_contracts} eligible contracts were provided by IBKR")
+        print(f"{avail_time_data} contracts out of a total of {total_contracts} eligible contracts were provided by IBKR ({round(100.0*avail_time_data/total_contracts,2)})%)")
         days_array.sort()
         middle_element = days_array[len(days_array) // 2]
         print(f"Median days from expiry is {middle_element}")
+        time_array.sort()
+        middle_idx = len(time_array) // 2
+        print(f"Median trading times are {time_array[middle_idx]}, {time_array[max(0,middle_idx-1)]} & {time_array[min(middle_idx+1,len(time_array)-1)]}")
+        print(max_trade_string)
 
     else:
         print("No options contracts found for {stk}.")
